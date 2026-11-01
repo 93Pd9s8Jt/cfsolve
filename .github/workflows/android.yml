@@ -1,0 +1,74 @@
+name: android
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # only used by the release step
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build clang libclang-dev pkg-config
+          LIBCLANG=$(find /usr/lib/llvm-* -name 'libclang.so*' -print -quit)
+          if [ -n "$LIBCLANG" ]; then
+            echo "LIBCLANG_PATH=$(dirname "$LIBCLANG")" >> "$GITHUB_ENV"
+          fi
+
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          targets: aarch64-linux-android
+          components: clippy, rustfmt
+
+      - name: Configure NDK
+        run: |
+          NDK="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+          if [ -z "$NDK" ]; then
+            echo "No NDK found on this runner" >&2
+            exit 1
+          fi
+          echo "ANDROID_NDK_HOME=$NDK" >> "$GITHUB_ENV"
+          BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          {
+            echo "CC_aarch64_linux_android=$BIN/aarch64-linux-android24-clang"
+            echo "CXX_aarch64_linux_android=$BIN/aarch64-linux-android24-clang++"
+            echo "AR_aarch64_linux_android=$BIN/llvm-ar"
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$BIN/aarch64-linux-android24-clang"
+            echo "CMAKE_GENERATOR=Ninja"
+            echo "BORING_BSSL_RUST_CPPLIB=c++_shared"
+          } >> "$GITHUB_ENV"
+
+      - name: Build
+        run: cargo build --release --target aarch64-linux-android --bin challenge
+
+      - name: Package
+        run: |
+          BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          SYS="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          mkdir -p dist/lib
+          cp target/aarch64-linux-android/release/challenge dist/
+          "$BIN/llvm-strip" dist/challenge
+          cp -r profiles dist/
+          cp "$SYS/usr/lib/aarch64-linux-android/libc++_shared.so" dist/lib/
+          tar -C dist -czf cfsolve-android-aarch64.tar.gz .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cfsolve-android-aarch64
+          path: cfsolve-android-aarch64.tar.gz
+          if-no-files-found: error
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: cfsolve-android-aarch64.tar.gz
