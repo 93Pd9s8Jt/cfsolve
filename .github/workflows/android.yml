@@ -39,16 +39,23 @@ jobs:
           echo "ANDROID_NDK_HOME=$NDK" >> "$GITHUB_ENV"
           BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
           {
-            echo "CC_aarch64_linux_android=$BIN/aarch64-linux-android24-clang"
-            echo "CXX_aarch64_linux_android=$BIN/aarch64-linux-android24-clang++"
+            echo "CC_aarch64_linux_android=$BIN/aarch64-linux-android21-clang"
+            echo "CXX_aarch64_linux_android=$BIN/aarch64-linux-android21-clang++"
             echo "AR_aarch64_linux_android=$BIN/llvm-ar"
-            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$BIN/aarch64-linux-android24-clang"
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$BIN/aarch64-linux-android21-clang"
             echo "CMAKE_GENERATOR=Ninja"
             echo "BORING_BSSL_RUST_CPPLIB=c++_shared"
+            # bindgen otherwise passes a bare `--target=aarch64-linux-android`, and NDK r27+
+            # rejects unversioned triples in sys/cdefs.h. The API suffix makes clang define
+            # __ANDROID_API__, and bindgen treats it as the explicit target (so it does not
+            # add the bare triple a second time).
+            echo "BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android=--target=aarch64-linux-android21"
           } >> "$GITHUB_ENV"
 
       - name: Build
-        run: cargo build --release --target aarch64-linux-android --bin challenge
+        run: |
+          cargo build --locked --release --target aarch64-linux-android \
+            --no-default-features --bin challenge
 
       - name: Package
         run: |
@@ -59,6 +66,7 @@ jobs:
           "$BIN/llvm-strip" dist/challenge
           cp -r profiles dist/
           cp "$SYS/usr/lib/aarch64-linux-android/libc++_shared.so" dist/lib/
+          "$BIN/llvm-readelf" -h -d dist/challenge
           tar -C dist -czf cfsolve-android-aarch64.tar.gz .
 
       - uses: actions/upload-artifact@v4
